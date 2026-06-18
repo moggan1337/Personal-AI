@@ -16,6 +16,8 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <span id="authStatus" class="muted"></span>
+      <button class="btn ghost" id="authBtn">Sign in</button>
       <input type="file" id="importFile" accept="application/json" hidden />
       <button class="btn ghost" id="importBtn" title="Import a shared twin (.json)">Import</button>
       <button class="btn primary" id="newTwinBtn">+ New twin</button>
@@ -83,6 +85,7 @@
           <div class="chat-layout">
             <div class="chat-history">
               <button class="btn primary block" id="newChatBtn">+ New chat</button>
+              <input id="searchInput" class="search-input" placeholder="Search chats…" />
               <div id="conversationList" class="conversation-list"></div>
             </div>
             <div class="chat-main">
@@ -90,6 +93,7 @@
                 <label>Mode
                   <select id="modeSelect"></select>
                 </label>
+                <button class="btn ghost" id="regenBtn" hidden>↻ Regenerate</button>
                 <span class="muted" id="chatTitle"></span>
               </div>
               <div class="chat-window" id="chatWindow"></div>
@@ -121,6 +125,24 @@
         <p class="muted">Or start from a ready-made example (comes pre-loaded with training data):</p>
         <div id="seedList" class="seed-list"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Auth modal -->
+  <div class="modal-backdrop hidden" id="authModal">
+    <div class="modal">
+      <h2 id="authTitle">Sign in</h2>
+      <p class="muted" id="authBlurb">Sign in to keep a private set of twins. You can also use the app without an account.</p>
+      <form id="authForm">
+        <label>Username<input id="authUser" required minlength="2" maxlength="80" autocomplete="username" /></label>
+        <label>Password<input id="authPass" type="password" required minlength="6" autocomplete="current-password" /></label>
+        <p class="auth-error" id="authError"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="authToggle">Create account</button>
+          <button type="button" class="btn ghost" id="authCancel">Cancel</button>
+          <button type="submit" class="btn primary" id="authSubmit">Sign in</button>
+        </div>
+      </form>
     </div>
   </div>
 

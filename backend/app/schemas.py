@@ -95,6 +95,27 @@ class SeedInfo(BaseModel):
     key: str
     name: str
     tagline: str
+    pretrained: bool = False
+
+
+class Credentials(BaseModel):
+    username: str = Field(min_length=2, max_length=80)
+    password: str = Field(min_length=6, max_length=200)
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+
+
+class SearchHit(BaseModel):
+    conversation_id: int
+    conversation_title: str
+    mode: str
+    message_id: int
+    role: str
+    snippet: str
+    created_at: dt.datetime
 
 
 class TwinImport(BaseModel):

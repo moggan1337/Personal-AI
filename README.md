@@ -118,11 +118,18 @@ time. That choice buys a lot:
   Claude with structured outputs and adaptive thinking.
 - **Persona inspector** — read the full profile, rendered as readable sections.
 - **Five-mode streaming chat** — talk to your twin; replies stream in real time.
+- **Knowledge retrieval** — at chat time, the samples most relevant to your
+  message are retrieved and injected into the prompt, so a twin's knowledge
+  scales past what fits in the persona summary.
 - **Seed personas** — three ready-made example twins (a growth advisor, a stoic
-  coach, a support specialist), each pre-loaded with authentic training data, so
-  you can try the entire flow without writing anything.
-- **Conversation history** — every chat is saved per twin and per mode; reopen,
-  continue, or delete past threads from the sidebar.
+  coach, a support specialist), each pre-loaded with authentic training data
+  **and a pre-built persona**, so you can chat immediately — no synthesis step.
+- **Conversation history & search** — every chat is saved per twin and per mode;
+  reopen, continue, or delete past threads, and search across all of a twin's
+  conversations from the sidebar.
+- **Regenerate** — re-roll the twin's last reply in a saved conversation.
+- **User accounts** — optional sign-up/sign-in gives each user a private set of
+  twins. The app also works fully anonymously.
 - **Export / import** — download a trained twin (persona + training data) as a
   shareable `.json`, and import one to recreate it instantly.
 
@@ -161,9 +168,17 @@ pip install -r requirements.txt
 uvicorn backend.app.main:app --reload --port 8000
 ```
 
-> **No API key yet?** The app still boots and you can create twins and add
-> training data — only **synthesis** and **chat** require the key, and they
-> return a clear `503` until it's set.
+> **No API key yet?** The app still boots and you can create twins, add training
+> data, and chat with the **pre-trained seed twins** (their personas ship with
+> the app). Only **synthesis** and **chat** call the model — without a key, chat
+> returns a clear error until it's set.
+
+### Accounts (optional)
+
+Use the app anonymously, or click **Sign in** to create an account. Each account
+has its own private set of twins; anonymous twins are visible only when signed
+out. Authentication is cookie-based with PBKDF2-hashed passwords — see
+[Design decisions](#design-decisions--faq).
 
 ---
 
@@ -208,11 +223,12 @@ Personal-AI/
 ├── backend/
 │   └── app/
 │       ├── config.py        Environment config: model id, categories, modes, paths
-│       ├── database.py       SQLAlchemy engine + models (Twin, TrainingSample,
-│       │                     Conversation, Message)
+│       ├── database.py       SQLAlchemy engine + models (User, AuthSession, Twin,
+│       │                     TrainingSample, Conversation, Message)
+│       ├── auth.py           Password hashing + session helpers (stdlib only)
 │       ├── schemas.py        Pydantic request/response models
-│       ├── seeds.py          Built-in example twins with training data
-│       ├── twin_engine.py    Anthropic integration: persona synthesis + streaming chat
+│       ├── seeds.py          Built-in example twins (with pre-built personas)
+│       ├── twin_engine.py    Anthropic integration: synthesis, retrieval, streaming chat
 │       └── main.py           FastAPI routes; serves the frontend
 ├── frontend/
 │   ├── index.html            Single-page UI
@@ -238,19 +254,22 @@ Personal-AI/
 ## Data model
 
 ```
-Twin ──┬──< TrainingSample      (category ∈ writing|decisions|knowledge|personality)
-       └──< Conversation ──< Message   (role ∈ user|assistant)
+User ──< Twin ──┬──< TrainingSample   (category ∈ writing|decisions|knowledge|personality)
+                └──< Conversation ──< Message   (role ∈ user|assistant)
 ```
 
 | Table | Key fields |
 |-------|------------|
-| `twins` | `name`, `owner`, `tagline`, `persona_json`, `persona_updated_at` |
+| `users` | `username` (unique), `salt`, `password_hash` |
+| `auth_sessions` | `token` (PK), `user_id` |
+| `twins` | `user_id` (nullable), `name`, `owner`, `tagline`, `persona_json` |
 | `training_samples` | `twin_id`, `category`, `content` |
 | `conversations` | `twin_id`, `title`, `mode`, `updated_at` |
 | `messages` | `conversation_id`, `role`, `content` |
 
-Deleting a twin cascades to its samples and conversations; deleting a
-conversation cascades to its messages.
+`twins.user_id` is `NULL` for anonymous twins. Logged-in users see only their own
+twins; anonymous callers see only unowned ones. Deleting a twin cascades to its
+samples and conversations; deleting a conversation cascades to its messages.
 
 ---
 
@@ -297,6 +316,18 @@ Base URL: `http://localhost:8000`. All payloads are JSON.
 |--------|------|-------------|
 | `GET`  | `/api/meta` | Available categories, modes, and the active model. |
 
+### Authentication
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/auth/register` | Create an account; sets a session cookie. Body: `{username, password}`. |
+| `POST` | `/api/auth/login` | Sign in; sets a session cookie. |
+| `POST` | `/api/auth/logout` | Sign out; clears the cookie. |
+| `GET`  | `/api/auth/me` | The current user, or `null` when anonymous. |
+
+All twin/conversation endpoints are scoped to the caller: requests are filtered
+to the signed-in user's twins, or to unowned twins when anonymous.
+
 ### Twins
 
 | Method | Path | Description |
@@ -319,8 +350,9 @@ Base URL: `http://localhost:8000`. All payloads are JSON.
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/twins/{id}/chat` | Stream a reply as `text/plain`. |
+| `POST` | `/api/conversations/{cid}/regenerate` | Re-roll the last assistant reply. |
 
-Request body:
+Chat request body:
 
 ```json
 { "mode": "consulting", "content": "How should I price this?", "conversation_id": null }
@@ -330,13 +362,17 @@ Request body:
 - The response is a streamed `text/plain` body. The thread id is returned in the
   **`X-Conversation-Id`** response header — pass it back as `conversation_id` to
   continue the same thread. Both the user turn and the assistant reply are
-  persisted.
+  persisted. The most relevant training samples are retrieved and injected into
+  the prompt for each turn.
+- `regenerate` drops the conversation's trailing assistant message and streams a
+  fresh reply in its place (same streaming contract).
 
-### Conversations
+### Conversations & search
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`    | `/api/twins/{id}/conversations` | List a twin's saved conversations. |
+| `GET`    | `/api/twins/{id}/search?q=...` | Search across a twin's conversation messages. |
 | `GET`    | `/api/conversations/{cid}` | A conversation with its full message list. |
 | `DELETE` | `/api/conversations/{cid}` | Delete a conversation. |
 
@@ -412,6 +448,20 @@ access for a small, single-node app.
 The UI is small and self-contained. Vanilla HTML/CSS/JS means zero build
 tooling, zero `node_modules`, and a frontend anyone can read top to bottom.
 
+**How does knowledge retrieval work?**
+At chat time the platform tokenizes your message and scores every training sample
+by term overlap (with light length normalization), then injects the top matches
+into the system prompt as "relevant memories." It's a dependency-free retrieval
+step that lets a twin draw on specific facts without stuffing every sample into
+the prompt — see `twin_engine.retrieve_relevant`.
+
+**How does authentication work?**
+Passwords are hashed with PBKDF2-HMAC-SHA256 (200k rounds, per-user salt) using
+only the standard library. A successful login stores an opaque random token in
+`auth_sessions` and sets it as an HTTP-only cookie. It's intentionally simple and
+self-contained — appropriate for a local/personal app, not a hardened public
+service.
+
 **Can I change the model?**
 Yes — set `TWIN_MODEL`. It defaults to `claude-opus-4-8`, the most capable model
 and the right fit for nuanced persona work.
@@ -444,12 +494,17 @@ and the right fit for nuanced persona work.
 
 ## Limitations & roadmap
 
-Current scope is a single-node reference implementation:
+Current scope is a single-node reference implementation. Recently shipped:
+**user accounts**, **cross-conversation search**, **per-message regenerate**,
+**pre-trained seed twins**, and **knowledge retrieval at chat time**.
 
-- No authentication or multi-user isolation — intended for local/personal use.
+Known limitations:
+
+- Auth is intentionally minimal (cookie sessions, no rate limiting or password
+  reset) — suitable for local/personal use, not a hardened public deployment.
 - Synthesis includes all samples in one prompt; very large corpora would benefit
-  from chunking or retrieval.
+  from chunking during synthesis too (retrieval already applies at chat time).
 - Conversation context is sent in full each turn (no server-side compaction yet).
 
-Natural next steps: cross-conversation search, per-message regenerate, seeding
-twins as already-trained, retrieval over large knowledge bases, and user accounts.
+Natural next steps: server-side compaction for long threads, semantic (embedding)
+retrieval, password reset, and per-twin sharing links.

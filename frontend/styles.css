@@ -206,6 +206,11 @@ body {
 .conversation-item .x:hover { color: var(--danger); }
 .chat-main { min-width: 0; }
 #chatTitle { margin-left: auto; }
+.search-input {
+  width: 100%; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 0.82rem;
+}
+.auth-error { color: var(--danger); font-size: 0.82rem; min-height: 1.1em; margin: 4px 0; }
 
 /* Seed picker */
 .seed-section { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }

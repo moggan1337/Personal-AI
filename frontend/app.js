@@ -30,6 +30,7 @@ const CATEGORY_HINTS = {
 
 const state = {
   meta: null,
+  user: null, // {id, username} or null
   seeds: [],
   twins: [],
   current: null, // TwinDetail
@@ -37,6 +38,7 @@ const state = {
   conversationId: null, // active conversation, or null for an unsaved new chat
   chat: [], // {role, content}
   streaming: false,
+  authMode: "login", // "login" | "register"
 };
 
 // ---- elements ----
@@ -54,6 +56,8 @@ async function boot() {
   populateModes();
   state.seeds = await api.get("/api/seeds");
   renderSeeds();
+  state.user = await api.get("/api/auth/me");
+  renderAuth();
   await refreshTwins();
   wireGlobalUI();
 }
@@ -62,7 +66,9 @@ function renderSeeds() {
   el("seedList").innerHTML = state.seeds
     .map(
       (s) => `<button class="seed-item" data-key="${s.key}">
-                <strong>${escapeHtml(s.name)}</strong>
+                <strong>${escapeHtml(s.name)}${
+        s.pretrained ? ' <span class="chip">ready to chat</span>' : ""
+      }</strong>
                 <span>${escapeHtml(s.tagline)}</span>
               </button>`
     )
@@ -70,6 +76,64 @@ function renderSeeds() {
   el("seedList").querySelectorAll(".seed-item").forEach((b) => {
     b.onclick = () => instantiateSeed(b.dataset.key);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+function renderAuth() {
+  if (state.user) {
+    el("authStatus").textContent = "@" + state.user.username;
+    el("authBtn").textContent = "Sign out";
+  } else {
+    el("authStatus").textContent = "";
+    el("authBtn").textContent = "Sign in";
+  }
+}
+
+function openAuthModal() {
+  state.authMode = "login";
+  applyAuthMode();
+  el("authError").textContent = "";
+  el("authForm").reset();
+  el("authModal").classList.remove("hidden");
+  el("authUser").focus();
+}
+
+function applyAuthMode() {
+  const register = state.authMode === "register";
+  el("authTitle").textContent = register ? "Create account" : "Sign in";
+  el("authSubmit").textContent = register ? "Create account" : "Sign in";
+  el("authToggle").textContent = register ? "Have an account? Sign in" : "Create account";
+}
+
+async function submitAuth() {
+  const username = el("authUser").value.trim();
+  const password = el("authPass").value;
+  const path = state.authMode === "register" ? "register" : "login";
+  try {
+    state.user = await api.post(`/api/auth/${path}`, { username, password });
+    el("authModal").classList.add("hidden");
+    renderAuth();
+    await onScopeChanged();
+  } catch (err) {
+    el("authError").textContent = err.message;
+  }
+}
+
+async function logout() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  state.user = null;
+  renderAuth();
+  await onScopeChanged();
+}
+
+// When the visible set of twins changes (login/logout), reset the workspace.
+async function onScopeChanged() {
+  state.current = null;
+  twinDetail.classList.add("hidden");
+  emptyState.classList.remove("hidden");
+  await refreshTwins();
 }
 
 async function instantiateSeed(key) {
@@ -305,6 +369,8 @@ function newChat() {
   state.conversationId = null;
   state.chat = [];
   el("chatTitle").textContent = "New chat";
+  const si = el("searchInput");
+  if (si) si.value = "";
   renderChat();
   renderConversations();
 }
@@ -318,12 +384,99 @@ function renderChat() {
     win.innerHTML = `<p class="muted" style="margin:auto">Say hello to ${escapeHtml(
       state.current ? state.current.name : "your twin"
     )}.</p>`;
+  } else {
+    win.innerHTML = state.chat
+      .map((m) => `<div class="bubble ${m.role}">${escapeHtml(m.content)}</div>`)
+      .join("");
+    win.scrollTop = win.scrollHeight;
+  }
+  updateRegenButton();
+}
+
+function updateRegenButton() {
+  const last = state.chat[state.chat.length - 1];
+  const canRegen =
+    !state.streaming &&
+    state.conversationId &&
+    last &&
+    last.role === "assistant" &&
+    last.content &&
+    !last.content.startsWith("[error");
+  el("regenBtn").hidden = !canRegen;
+}
+
+async function regenerate() {
+  if (!state.conversationId || state.streaming) return;
+  if (state.chat.length && state.chat[state.chat.length - 1].role === "assistant") {
+    state.chat.pop(); // the server will drop and replace it too
+  }
+  state.chat.push({ role: "assistant", content: "" });
+  const idx = state.chat.length - 1;
+  state.streaming = true;
+  el("sendBtn").disabled = true;
+  renderChat();
+  try {
+    const resp = await fetch(`/api/conversations/${state.conversationId}/regenerate`, {
+      method: "POST",
+    });
+    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      state.chat[idx].content += decoder.decode(value, { stream: true });
+      renderChat();
+    }
+  } catch (err) {
+    state.chat[idx].content = "[error: " + err.message + "]";
+  } finally {
+    state.streaming = false;
+    el("sendBtn").disabled = false;
+    renderChat();
+    await refreshConversations();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-conversation search
+// ---------------------------------------------------------------------------
+let searchTimer = null;
+function onSearchInput(value) {
+  clearTimeout(searchTimer);
+  const q = value.trim();
+  if (!q) {
+    renderConversations();
     return;
   }
-  win.innerHTML = state.chat
-    .map((m) => `<div class="bubble ${m.role}">${escapeHtml(m.content)}</div>`)
+  searchTimer = setTimeout(() => runSearch(q), 200);
+}
+
+async function runSearch(q) {
+  const hits = await api.get(
+    `/api/twins/${state.current.id}/search?q=${encodeURIComponent(q)}`
+  );
+  const list = el("conversationList");
+  if (!hits.length) {
+    list.innerHTML = `<p class="muted" style="font-size:.78rem">No matches.</p>`;
+    return;
+  }
+  list.innerHTML = hits
+    .map(
+      (h) => `<div class="conversation-item" data-id="${h.conversation_id}">
+                <div class="title">
+                  <div>${escapeHtml(h.conversation_title)}</div>
+                  <div class="mode">${h.role}: ${escapeHtml(h.snippet)}</div>
+                </div>
+              </div>`
+    )
     .join("");
-  win.scrollTop = win.scrollHeight;
+  list.querySelectorAll(".conversation-item").forEach((item) => {
+    item.onclick = () => {
+      el("searchInput").value = "";
+      openConversation(Number(item.dataset.id));
+    };
+  });
 }
 
 async function sendChat(e) {
@@ -431,7 +584,22 @@ function wireGlobalUI() {
   el("trainBtn").onclick = trainTwin;
   el("chatForm").onsubmit = sendChat;
   el("newChatBtn").onclick = newChat;
+  el("regenBtn").onclick = regenerate;
+  el("searchInput").oninput = (e) => onSearchInput(e.target.value);
   el("exportTwinBtn").onclick = exportTwin;
+
+  // Auth
+  el("authBtn").onclick = () => (state.user ? logout() : openAuthModal());
+  el("authCancel").onclick = () => el("authModal").classList.add("hidden");
+  el("authToggle").onclick = () => {
+    state.authMode = state.authMode === "register" ? "login" : "register";
+    applyAuthMode();
+    el("authError").textContent = "";
+  };
+  el("authForm").onsubmit = (e) => {
+    e.preventDefault();
+    submitAuth();
+  };
   el("importBtn").onclick = () => el("importFile").click();
   el("importFile").onchange = (e) => {
     const file = e.target.files[0];

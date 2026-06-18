@@ -32,12 +32,38 @@ def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+class User(Base):
+    """A registered user who owns a private set of twins."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    salt: Mapped[str] = mapped_column(String(64))
+    password_hash: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class AuthSession(Base):
+    """An opaque session token mapping a cookie to a user."""
+
+    __tablename__ = "auth_sessions"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
 class Twin(Base):
     """An AI version of a person."""
 
     __tablename__ = "twins"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Owning user. NULL means an unowned/anonymous twin (visible without login).
+    user_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(120))
     owner: Mapped[str] = mapped_column(String(120), default="")
     tagline: Mapped[str] = mapped_column(String(280), default="")

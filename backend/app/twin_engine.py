@@ -11,11 +11,21 @@ Two responsibilities:
 from __future__ import annotations
 
 import json
+import re
 from typing import Iterator, Optional
 
 import anthropic
 
 from .config import ANTHROPIC_API_KEY, TWIN_MODEL
+
+_WORD_RE = re.compile(r"[a-z0-9']+")
+# Common words that shouldn't drive retrieval relevance.
+_STOPWORDS = frozenset(
+    "the a an and or but if then so of to in on at for with from by as is are was "
+    "were be been being do does did have has had i you he she it we they me my your "
+    "this that these those what how when where why who which can could should would "
+    "will not no yes about into out up down over under again more most".split()
+)
 
 # A single shared client. anthropic.Anthropic() also reads ANTHROPIC_API_KEY from
 # the environment; we pass it explicitly so a clear error surfaces when missing.
@@ -191,9 +201,52 @@ def _persona_to_prompt(name: str, persona: dict) -> str:
     )
 
 
-def build_system_prompt(name: str, persona: dict, mode: str) -> str:
+def _tokenize(text: str) -> set[str]:
+    return {w for w in _WORD_RE.findall(text.lower()) if w not in _STOPWORDS and len(w) > 2}
+
+
+def retrieve_relevant(
+    query: str, samples: list[dict], k: int = 5
+) -> list[dict]:
+    """Select the training samples most relevant to ``query``.
+
+    ``samples`` is a list of ``{"category", "content"}`` dicts. Scoring is simple
+    term overlap with light length normalization — enough to surface the right
+    memories from a large knowledge base without any external index.
+    """
+    query_terms = _tokenize(query)
+    if not query_terms:
+        return []
+    scored = []
+    for sample in samples:
+        terms = _tokenize(sample["content"])
+        if not terms:
+            continue
+        overlap = len(query_terms & terms)
+        if overlap:
+            # Reward overlap; gently penalize very long samples.
+            score = overlap / (1 + 0.01 * len(terms))
+            scored.append((score, sample))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [s for _, s in scored[:k]]
+
+
+def build_system_prompt(
+    name: str, persona: dict, mode: str, memories: Optional[list[dict]] = None
+) -> str:
     mode_text = _MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS["conversation"])
-    return f"{_persona_to_prompt(name, persona)}\n\n=== CURRENT MODE ===\n{mode_text}"
+    prompt = f"{_persona_to_prompt(name, persona)}\n\n=== CURRENT MODE ===\n{mode_text}"
+    if memories:
+        rendered = "\n".join(
+            f"- ({m['category']}) {m['content']}" for m in memories
+        )
+        prompt += (
+            "\n\n=== RELEVANT MEMORIES ===\n"
+            "These are real samples from your own past that relate to the current "
+            "message. Draw on them naturally and in your own voice — do not quote "
+            "them verbatim or mention that they were retrieved.\n" + rendered
+        )
+    return prompt
 
 
 def stream_reply(
@@ -201,10 +254,11 @@ def stream_reply(
     persona: dict,
     mode: str,
     messages: list[dict],
+    memories: Optional[list[dict]] = None,
 ) -> Iterator[str]:
     """Stream the twin's reply token by token."""
     client = get_client()
-    system_prompt = build_system_prompt(name, persona, mode)
+    system_prompt = build_system_prompt(name, persona, mode, memories)
 
     with client.messages.stream(
         model=TWIN_MODEL,
