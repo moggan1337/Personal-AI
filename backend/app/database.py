@@ -50,6 +50,11 @@ class Twin(Base):
     samples: Mapped[list["TrainingSample"]] = relationship(
         back_populates="twin", cascade="all, delete-orphan", order_by="TrainingSample.id"
     )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        back_populates="twin",
+        cascade="all, delete-orphan",
+        order_by="Conversation.updated_at.desc()",
+    )
 
 
 class TrainingSample(Base):
@@ -64,6 +69,40 @@ class TrainingSample(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
     twin: Mapped[Twin] = relationship(back_populates="samples")
+
+
+class Conversation(Base):
+    """A saved chat thread between a user and a twin, in a given mode."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    twin_id: Mapped[int] = mapped_column(ForeignKey("twins.id"))
+    title: Mapped[str] = mapped_column(String(200), default="New conversation")
+    mode: Mapped[str] = mapped_column(String(40), default="conversation")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+    twin: Mapped[Twin] = relationship(back_populates="conversations")
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.id",
+    )
+
+
+class Message(Base):
+    """A single turn within a conversation."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"))
+    role: Mapped[str] = mapped_column(String(20))  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
 
 def init_db() -> None:
