@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Personal AI Twin Platform</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◐</span>
+      <div>
+        <h1>Personal AI Twin</h1>
+        <p class="muted" id="modelLabel">train an AI version of yourself</p>
+      </div>
+    </div>
+    <button class="btn primary" id="newTwinBtn">+ New twin</button>
+  </header>
+
+  <main class="layout">
+    <!-- Sidebar: list of twins -->
+    <aside class="sidebar">
+      <h2 class="section-title">Your twins</h2>
+      <div id="twinList" class="twin-list"></div>
+    </aside>
+
+    <!-- Workspace -->
+    <section class="workspace" id="workspace">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">◐</div>
+        <h2>Select or create a twin</h2>
+        <p class="muted">
+          A twin learns your writing style, decision-making, knowledge, and
+          personality — then works as you for consulting, coaching, support, and
+          content.
+        </p>
+      </div>
+
+      <div class="twin-detail hidden" id="twinDetail">
+        <div class="detail-header">
+          <div>
+            <h2 id="detailName"></h2>
+            <p class="muted" id="detailTagline"></p>
+          </div>
+          <div class="detail-actions">
+            <span class="badge" id="trainedBadge"></span>
+            <button class="btn danger ghost" id="deleteTwinBtn">Delete</button>
+          </div>
+        </div>
+
+        <nav class="tabs">
+          <button class="tab active" data-tab="train">Train</button>
+          <button class="tab" data-tab="persona">Persona</button>
+          <button class="tab" data-tab="chat">Chat</button>
+        </nav>
+
+        <!-- TRAIN TAB -->
+        <div class="tab-panel" data-panel="train">
+          <p class="muted">
+            Add examples in each dimension, then synthesize the persona. The more
+            varied and authentic the samples, the more convincing the twin.
+          </p>
+          <div class="category-grid" id="categoryGrid"></div>
+          <div class="train-bar">
+            <button class="btn primary" id="trainBtn">Synthesize / re-train persona</button>
+            <span id="trainStatus" class="muted"></span>
+          </div>
+        </div>
+
+        <!-- PERSONA TAB -->
+        <div class="tab-panel hidden" data-panel="persona">
+          <div id="personaView"></div>
+        </div>
+
+        <!-- CHAT TAB -->
+        <div class="tab-panel hidden" data-panel="chat">
+          <div class="chat-controls">
+            <label>Mode
+              <select id="modeSelect"></select>
+            </label>
+            <button class="btn ghost" id="clearChatBtn">Clear</button>
+          </div>
+          <div class="chat-window" id="chatWindow"></div>
+          <form class="chat-input" id="chatForm">
+            <textarea id="chatInput" rows="2" placeholder="Message your twin…"></textarea>
+            <button class="btn primary" id="sendBtn" type="submit">Send</button>
+          </form>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- New twin modal -->
+  <div class="modal-backdrop hidden" id="modal">
+    <div class="modal">
+      <h2>Create a twin</h2>
+      <form id="newTwinForm">
+        <label>Name<input id="twinName" required maxlength="120" placeholder="e.g. Jordan Avery" /></label>
+        <label>Owner <span class="muted">(optional)</span><input id="twinOwner" maxlength="120" /></label>
+        <label>Tagline <span class="muted">(optional)</span><input id="twinTagline" maxlength="280" placeholder="Growth marketing advisor" /></label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="cancelModal">Cancel</button>
+          <button type="submit" class="btn primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
