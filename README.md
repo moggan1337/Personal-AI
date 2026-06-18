@@ -41,6 +41,16 @@ exactly what your twin "learned."
 `conversation` · `consulting` · `coaching` · `support` · `content` — each
 reframes how the twin behaves while staying in the same voice.
 
+### Also included
+
+- **Seed personas** — three ready-made example twins (a growth advisor, a stoic
+  coach, a support specialist), each pre-loaded with authentic training data so
+  you can try the full flow in one click.
+- **Conversation history** — every chat is saved per twin and per mode; reopen,
+  continue, or delete past threads from the sidebar.
+- **Export / import** — download a trained twin (persona + training data) as a
+  shareable `.json` file, and import one to recreate it instantly.
+
 ---
 
 ## Quick start
@@ -90,8 +100,9 @@ uvicorn backend.app.main:app --reload --port 8000
 ```
 backend/app/
   config.py        Environment config, model id, categories, modes
-  database.py      SQLAlchemy models (Twin, TrainingSample) + SQLite engine
+  database.py      SQLAlchemy models (Twin, TrainingSample, Conversation, Message)
   schemas.py       Pydantic request/response models
+  seeds.py         Built-in example twins with training data
   twin_engine.py   Anthropic calls: persona synthesis + streaming chat
   main.py          FastAPI routes; serves the frontend
 frontend/
@@ -114,7 +125,17 @@ tests/
 | `POST` | `/api/twins/{id}/samples` | Add a training sample |
 | `DELETE` | `/api/twins/{id}/samples/{sid}` | Remove a sample |
 | `POST` | `/api/twins/{id}/train` | Synthesize the persona profile |
-| `POST` | `/api/twins/{id}/chat` | Stream a reply (`text/plain`) |
+| `POST` | `/api/twins/{id}/chat` | Stream a reply (`text/plain`); persists the turn |
+| `GET`  | `/api/seeds` | List ready-made example twins |
+| `POST` | `/api/seeds/{key}/instantiate` | Create a twin from a seed |
+| `GET`  | `/api/twins/{id}/export` | Export a twin as shareable JSON |
+| `POST` | `/api/twins/import` | Import a twin from JSON |
+| `GET`  | `/api/twins/{id}/conversations` | List saved conversations |
+| `GET`  | `/api/conversations/{cid}` | Conversation with its messages |
+| `DELETE` | `/api/conversations/{cid}` | Delete a conversation |
+
+The chat endpoint returns the thread id in the `X-Conversation-Id` response
+header; pass it back as `conversation_id` to continue a thread.
 
 ### Tech
 

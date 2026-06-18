@@ -30,8 +30,11 @@ const CATEGORY_HINTS = {
 
 const state = {
   meta: null,
+  seeds: [],
   twins: [],
   current: null, // TwinDetail
+  conversations: [],
+  conversationId: null, // active conversation, or null for an unsaved new chat
   chat: [], // {role, content}
   streaming: false,
 };
@@ -49,8 +52,33 @@ async function boot() {
   state.meta = await api.get("/api/meta");
   el("modelLabel").textContent = `powered by ${state.meta.model}`;
   populateModes();
+  state.seeds = await api.get("/api/seeds");
+  renderSeeds();
   await refreshTwins();
   wireGlobalUI();
+}
+
+function renderSeeds() {
+  el("seedList").innerHTML = state.seeds
+    .map(
+      (s) => `<button class="seed-item" data-key="${s.key}">
+                <strong>${escapeHtml(s.name)}</strong>
+                <span>${escapeHtml(s.tagline)}</span>
+              </button>`
+    )
+    .join("");
+  el("seedList").querySelectorAll(".seed-item").forEach((b) => {
+    b.onclick = () => instantiateSeed(b.dataset.key);
+  });
+}
+
+async function instantiateSeed(key) {
+  const created = await api.post(`/api/seeds/${key}/instantiate`);
+  el("modal").classList.add("hidden");
+  await refreshTwins();
+  await openTwin(created.id);
+  el("trainStatus").textContent =
+    "Loaded with example data — click “Synthesize persona” to bring this twin to life.";
 }
 
 function populateModes() {
@@ -92,11 +120,12 @@ function renderTwinList() {
 // ---------------------------------------------------------------------------
 async function openTwin(id) {
   state.current = await api.get(`/api/twins/${id}`);
-  state.chat = [];
+  newChat();
   emptyState.classList.add("hidden");
   twinDetail.classList.remove("hidden");
   renderTwinList();
   renderDetail();
+  await refreshConversations();
   selectTab("train");
 }
 
@@ -222,10 +251,75 @@ function section(title, obj) {
 }
 
 // ---------------------------------------------------------------------------
+// Conversations
+// ---------------------------------------------------------------------------
+async function refreshConversations() {
+  state.conversations = await api.get(`/api/twins/${state.current.id}/conversations`);
+  renderConversations();
+}
+
+function renderConversations() {
+  const list = el("conversationList");
+  if (!state.conversations.length) {
+    list.innerHTML = `<p class="muted" style="font-size:.78rem">No saved chats yet.</p>`;
+    return;
+  }
+  list.innerHTML = state.conversations
+    .map(
+      (c) => `<div class="conversation-item ${c.id === state.conversationId ? "active" : ""}" data-id="${c.id}">
+                <div class="title">
+                  <div>${escapeHtml(c.title)}</div>
+                  <div class="mode">${c.mode} · ${c.message_count} msgs</div>
+                </div>
+                <button class="x" data-del="${c.id}" title="Delete">×</button>
+              </div>`
+    )
+    .join("");
+  list.querySelectorAll(".conversation-item").forEach((item) => {
+    item.onclick = (e) => {
+      if (e.target.dataset.del) return;
+      openConversation(Number(item.dataset.id));
+    };
+  });
+  list.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      await api.del(`/api/conversations/${btn.dataset.del}`);
+      if (Number(btn.dataset.del) === state.conversationId) newChat();
+      await refreshConversations();
+    };
+  });
+}
+
+async function openConversation(id) {
+  const conv = await api.get(`/api/conversations/${id}`);
+  state.conversationId = conv.id;
+  state.chat = conv.messages.map((m) => ({ role: m.role, content: m.content }));
+  el("modeSelect").value = conv.mode;
+  el("chatTitle").textContent = conv.title;
+  renderConversations();
+  renderChat();
+}
+
+function newChat() {
+  state.conversationId = null;
+  state.chat = [];
+  el("chatTitle").textContent = "New chat";
+  renderChat();
+  renderConversations();
+}
+
+// ---------------------------------------------------------------------------
 // Chat (streaming)
 // ---------------------------------------------------------------------------
 function renderChat() {
   const win = el("chatWindow");
+  if (!state.chat.length) {
+    win.innerHTML = `<p class="muted" style="margin:auto">Say hello to ${escapeHtml(
+      state.current ? state.current.name : "your twin"
+    )}.</p>`;
+    return;
+  }
   win.innerHTML = state.chat
     .map((m) => `<div class="bubble ${m.role}">${escapeHtml(m.content)}</div>`)
     .join("");
@@ -257,10 +351,15 @@ async function sendChat(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mode: el("modeSelect").value,
-        messages: state.chat.slice(0, idx), // history excluding the empty assistant turn
+        content: text,
+        conversation_id: state.conversationId, // null starts a new thread
       }),
     });
     if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
+
+    // The server tells us which conversation this turn belongs to.
+    const cid = resp.headers.get("X-Conversation-Id");
+    if (cid) state.conversationId = Number(cid);
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -276,6 +375,40 @@ async function sendChat(e) {
   } finally {
     state.streaming = false;
     el("sendBtn").disabled = false;
+    await refreshConversations(); // pick up the new title / ordering
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export / import
+// ---------------------------------------------------------------------------
+async function exportTwin() {
+  const data = await api.get(`/api/twins/${state.current.id}/export`);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const safe = data.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  a.href = url;
+  a.download = `twin-${safe || "export"}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importTwinFromFile(file) {
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const created = await api.post("/api/twins/import", {
+      name: data.name,
+      owner: data.owner || "",
+      tagline: data.tagline || "",
+      persona: data.persona || null,
+      samples_by_category: data.samples_by_category || {},
+    });
+    await refreshTwins();
+    await openTwin(created.id);
+  } catch (err) {
+    alert("Import failed: " + err.message);
   }
 }
 
@@ -297,9 +430,13 @@ function wireGlobalUI() {
   });
   el("trainBtn").onclick = trainTwin;
   el("chatForm").onsubmit = sendChat;
-  el("clearChatBtn").onclick = () => {
-    state.chat = [];
-    renderChat();
+  el("newChatBtn").onclick = newChat;
+  el("exportTwinBtn").onclick = exportTwin;
+  el("importBtn").onclick = () => el("importFile").click();
+  el("importFile").onchange = (e) => {
+    const file = e.target.files[0];
+    if (file) importTwinFromFile(file);
+    e.target.value = "";
   };
   el("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
